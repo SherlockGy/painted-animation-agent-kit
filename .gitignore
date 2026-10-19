@@ -1,0 +1,8 @@
+node_modules
+out/
+
+# 本地配置与系统文件
+.DS_Store
+.env
+.env.*
+!.env.example
