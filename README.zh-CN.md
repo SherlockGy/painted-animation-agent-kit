@@ -14,7 +14,7 @@
 
 Agent 会先读 [ANIMATION_GUIDE.md](ANIMATION_GUIDE.md)（[CLAUDE.md](CLAUDE.md) 已经要求它这样做），再按里面的流程：先写分镜，逐个镜头制作，渲染检查图自查，最后输出 `out/video.mp4`。
 
-长片（一分钟以上或多个段落）可以让 Agent 按指南里"长片：分章节与多 agent 并行"一节，拆成章节交给多个子 Agent 并行做。
+长片（一分钟以上或多个段落）可以让 Agent 按指南里"长片：分章节与多 agent 并行"一节，拆成章节交给多个子 Agent 并行做。Agent 还会根据片子的类型，建议要不要按章独立制作：每章单独渲染、单独修改，最后拼成一片。
 
 ## 自己运行
 
@@ -29,6 +29,8 @@ node render.mjs --clip --out=out/video.mp4
 
 没有独立显卡时，水彩填充会让渲染变慢，每帧要几秒。Linux 无头环境和无 GPU 的情况见 [render.mjs](render.mjs) 开头的注释和 `gpu_probe.mjs`。
 
+长渲染不用盯着：`--frames` 遇到黑图（WebGL 上下文丢失）会重开页面重渲，每隔几百帧主动重开页面，系统内存不足时暂停、内存回来再继续（`--low-gb`、`--resume-gb`）。渲染被中断后，重跑同一条命令即可，已渲好的帧会跳过。按章模式另有 `--chapter` 和 `--concat`，见 [render.mjs](render.mjs) 开头的注释。
+
 ## 目录
 
 | 路径 | 内容 |
@@ -38,10 +40,11 @@ node render.mjs --clip --out=out/video.mp4
 | [src/core.js](src/core.js) | 绘制、时间、动作工具、镜头、光、纸张 |
 | [src/clawd.js](src/clawd.js) | Clawd：视角、情绪、眼睛、嘴、帽子、表情符号、舞蹈 |
 | [src/timeline.js](src/timeline.js) | 镜头登记、循环动画、笔刷擦除转场 |
-| [src/config.js](src/config.js) | 时长和节拍 |
+| [src/chapters.js](src/chapters.js) | 可选的按章模式：章节标题卡、角落小章节名、每章结尾的笔刷收尾 |
+| [src/config.js](src/config.js) | 时长和节拍；按章模式的章节表 |
 | [src/sheets.js](src/sheets.js) | 角色设定图（情绪表、视角表） |
 | [src/scenes/](src/scenes/) | 视频场景放这里（demo 只是示例） |
-| [render.mjs](render.mjs) | 无头渲染器：检查表、连续帧、裁剪、静帧、MP4 |
+| [render.mjs](render.mjs) | 无头渲染器：检查表、连续帧、裁剪、静帧、MP4；长渲染守护；按章渲染和拼接 |
 | [docs/](docs/) | 设定图：[情绪](docs/emotions.jpg)（[动态版](docs/emotions.webp)）、[视角、动作和帽子](docs/views.jpg) |
 
 ## 来源

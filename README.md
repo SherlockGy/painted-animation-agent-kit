@@ -16,7 +16,7 @@ Open Claude Code in this folder and say what you want:
 
 The agent first reads [ANIMATION_GUIDE.md](ANIMATION_GUIDE.md) ([CLAUDE.md](CLAUDE.md) tells it to), then follows its workflow: storyboard first, build shot by shot, review with rendered check images, and output `out/video.mp4`.
 
-For long pieces (over a minute, or several sections), ask the agent to follow the guide's section on long films: split the piece into chapters and hand them to several sub-agents working in parallel.
+For long pieces (over a minute, or several sections), ask the agent to follow the guide's section on long films: split the piece into chapters and hand them to several sub-agents working in parallel. The agent will also suggest whether to make it chapter by chapter, where each chapter is rendered and revised on its own and the chapters are joined at the end.
 
 The guide is written in Simplified Chinese. Agents read it fine either way.
 
@@ -33,6 +33,8 @@ This renders the 11-second example in [src/scenes/demo.js](src/scenes/demo.js). 
 
 Without a dedicated GPU, watercolour fills slow rendering down to a few seconds per frame. For headless Linux and machines with no GPU, see the notes at the top of [render.mjs](render.mjs) and `gpu_probe.mjs`.
 
+Long renders look after themselves: `--frames` re-renders any frame that comes out black (a lost WebGL context), reopens pages every few hundred frames, and pauses workers while free memory is low (`--low-gb`, `--resume-gb`). If a render is stopped, run the same command again; finished frames are skipped. Chapter mode adds `--chapter` and `--concat`; see the notes at the top of [render.mjs](render.mjs).
+
 ## What's here
 
 | Path | What it is |
@@ -42,10 +44,11 @@ Without a dedicated GPU, watercolour fills slow rendering down to a few seconds 
 | [src/core.js](src/core.js) | Painting, timing, motion helpers, camera, light, paper |
 | [src/clawd.js](src/clawd.js) | Clawd: views, emotions, eyes, mouths, hats, emotes, dances |
 | [src/timeline.js](src/timeline.js) | Shot registration, loops, brush-wipe transition |
-| [src/config.js](src/config.js) | Length and tempo |
+| [src/chapters.js](src/chapters.js) | Optional chapter mode: chapter cards, chapter label, chapter-end wipes |
+| [src/config.js](src/config.js) | Length and tempo; the chapter table in chapter mode |
 | [src/sheets.js](src/sheets.js) | Model sheets (emotions, views) |
 | [src/scenes/](src/scenes/) | Your video's scenes go here (the demo is only an example) |
-| [render.mjs](render.mjs) | Headless renderer: contact sheets, frame strips, crops, stills, MP4 |
+| [render.mjs](render.mjs) | Headless renderer: contact sheets, frame strips, crops, stills, MP4; long-render guard; per-chapter render and join |
 | [docs/](docs/) | Model sheets: [emotions](docs/emotions.jpg) ([animated](docs/emotions.webp)), [views, motion and hats](docs/views.jpg) |
 
 ## Credits

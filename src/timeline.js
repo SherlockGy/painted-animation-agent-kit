@@ -19,6 +19,8 @@ function drawWorld(t) {
     const t0 = SHOTS[i][0], end = i + 1 < SHOTS.length ? SHOTS[i + 1][0] : DUR;
     SHOTS[i][1](t, t - t0, end - t0);
     CAM = null;
+    drawChapterLabel(t);   // 按章模式：左上角的小章节名（src/chapters.js；普通模式下什么都不画）
+    chapterOutro(t);       // 按章模式：每章结尾的笔刷收尾，盖在所有东西之上
   }
   flushLetters();
 }
