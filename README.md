@@ -35,7 +35,7 @@ Without a dedicated GPU, watercolour fills slow rendering down to a few seconds 
 
 Long renders look after themselves: `--frames` re-renders any frame that comes out black (a lost WebGL context), reopens pages every few hundred frames, and pauses workers while free memory is low (`--low-gb`, `--resume-gb`). If a render is stopped, run the same command again; finished frames are skipped. Chapter mode adds `--chapter` and `--concat`; see the notes at the top of [render.mjs](render.mjs).
 
-Before delivering, run `node render.mjs --review`: it checks for text leaving the frame, sudden jumps and long static stretches, renders a frame strip for every registered checkpoint and every cut, and writes a report (see “Pre-delivery review” in the guide).
+Before delivering, run `node render.mjs --review`: it checks for text leaving the frame, sudden jumps and long static stretches, renders a frame strip for every registered checkpoint and every cut, and writes a report (see [交付前统一校验 / Pre-delivery review](ANIMATION_GUIDE.md#5-交付前统一校验) in the guide).
 
 ## What's here
 
