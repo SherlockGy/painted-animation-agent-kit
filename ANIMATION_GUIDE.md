@@ -406,7 +406,7 @@ node render.mjs --concat --out=out/video_{v}.mp4       # 拼成一片，{v} 自�
   - 在放大的镜头下，离原点很远的笔画会塌掉：放大到 2 倍左右时，世界坐标很大的轮廓或线条只剩第一个顶点处的一个点。`paint()` 和 `inkLine()` 会把每个形状围绕它自己的中心来画，从而避开这个问题。比画布大很多的形状仍然可能丢失轮廓：长边改用不超过画布大小的 `inkLine` 来画。
   - 描边粗细是世界单位，所以会随镜头放大而变粗：小形状上的细描边在特写里会变成一团黑。小形状的 `sw` 要随放大倍数调小。
   - 点列表里有 NaN 会抛出 `Failed to construct 'OffscreenCanvas': Value is not of type 'unsigned long'`，而调用栈指向你的场景，不指向 NaN。可能退化的几何要做保护（比如对大于 1 的比值求 `Math.acos`）。
-  - p5 的 `push()/pop()/translate()/rotate()/scale()` 对所有笔刷调用都有效。
+  - p5 的 `push()/pop()/translate()/rotate()/scale()` 对所有笔刷调用都有效，对 `letter()` / `sfx()` 写的字也有效：字的位置、大小、角度跟着变换走（镜像只挪位置，字不翻转）。要把字固定在屏幕上，传 `{ screen: true }`，这时 x、y 是屏幕像素。
   - 开销取决于 `fill` 形状和笔画的数量：几百个没问题，几千个不行。目标是每帧 ≤ 1.5 秒，渲染日志会打印每帧毫秒数。
   - 有些场景会让 p5.brush 在每个页面打印五次 `WebGL: INVALID_OPERATION ... not from the associated program` 警告，无害（输出的帧完全一样）。其他任何页面错误都是真问题。
 
@@ -435,7 +435,7 @@ node render.mjs --concat --out=out/video_{v}.mp4       # 拼成一片，{v} 自�
   - `iris(cx, cy, r, colour)` 和 `irisShape(pts, colour)`：异形揭示。
   - `flash(k, colour)`：全屏闪光。
 - **文字**（只在必须时用，见"不出现文字"）：
-  - `letter(txt, x, y, size, colour, {pop, rot, alpha, screen})`
+  - `letter(txt, x, y, size, colour, {pop, rot, alpha, screen})`：坐标是当前变换下的坐标（和 `paint` 一样）；`screen: true` 时是屏幕像素
   - `sfx(txt, x, y, size, colour, age)`
   - 两者都在镜头结束后的 `flushLetters()` 合成。如果擦除或光圈要盖住它们，先自己调用一次。
 

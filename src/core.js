@@ -213,8 +213,27 @@ function inkLine(pts, sw = 1, col = PAL.ink, br = 'ink', curv = .5) {
 
 // ---------- lettering (drawn on the 2D compositor, under the paper grain) ----------
 // Use sparingly: see "No text" in ANIMATION_GUIDE.md. Clawd's emotes are painted and never need these.
+// 文字跟随当前变换：letter() 记录的是最终的屏幕位置。镜头（camBegin）和场景代码里的 push / translate / rotate / scale
+// 都会算进去：位置按当前变换换算，字号乘以变换的缩放，角度加上变换的旋转。
+// 镜像（scale 取负值）只改变文字的位置，不会把字形翻过来，字永远是正着读的。
+// { screen: true }：x、y 已经是屏幕像素，不经过任何变换（标题卡、角落标签这类贴在屏幕上的字）。
+function letterPlace(x, y) {
+  const p = worldToScreen(x, y, 0), px = worldToScreen(x + 1, y, 0), py = worldToScreen(x, y + 1, 0);
+  const ax = [px.x - p.x, px.y - p.y], ay = [py.x - p.x, py.y - p.y];
+  const det = ax[0] * ay[1] - ax[1] * ay[0];
+  // 字号缩放取面积缩放的平方根（等比缩放时就是缩放倍数；非等比缩放时取两个方向的几何平均）
+  const k = Math.sqrt(Math.abs(det));
+  // 旋转取 x 轴的方向；镜像时 x 轴反了，改用反过来的 x 轴，字保持正向
+  const rot = det < 0 ? Math.atan2(-ax[1], -ax[0]) : Math.atan2(ax[1], ax[0]);
+  return { x: p.x, y: p.y, k, rot };
+}
 function letter(txt, x, y, size, color, o = {}) {
-  if (CAM && !o.screen) { [x, y] = toScreen(x, y); size *= CAM.zoom; o = { ...o, rot: (o.rot || 0) + CAM.rot }; if (o.font) o.font = o.font.replace(/(\d+(\.\d+)?)px/, (m, v) => (v * CAM.zoom) + 'px'); }
+  if (!o.screen) {
+    const m = letterPlace(x, y);
+    x = m.x; y = m.y; size *= m.k;
+    o = { ...o, rot: (o.rot || 0) + m.rot };
+    if (o.font) o.font = o.font.replace(/(\d+(\.\d+)?)px/, (s, v) => (v * m.k) + 'px');
+  }
   LETTERS.push({ txt, x, y, size, color, ...o });
 }
 // Comic sound effect: pops in at age 0, wobbles, fades by `life` seconds.
