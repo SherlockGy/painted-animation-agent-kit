@@ -31,6 +31,8 @@ node render.mjs --clip --out=out/video.mp4
 
 长渲染不用盯着：`--frames` 遇到黑图（WebGL 上下文丢失）会重开页面重渲，每隔几百帧主动重开页面，系统内存不足时暂停、内存回来再继续（`--low-gb`、`--resume-gb`）。渲染被中断后，重跑同一条命令即可，已渲好的帧会跳过。按章模式另有 `--chapter` 和 `--concat`，见 [render.mjs](render.mjs) 开头的注释。
 
+交付之前跑 `node render.mjs --review`：它会自动检查文字出画、画面跳变、长时间静止，为每个登记的检查点和镜头切换出一张连续帧图，汇总成报告（见指南“交付前统一校验”）。
+
 ## 目录
 
 | 路径 | 内容 |
@@ -44,7 +46,7 @@ node render.mjs --clip --out=out/video.mp4
 | [src/config.js](src/config.js) | 时长和节拍；按章模式的章节表 |
 | [src/sheets.js](src/sheets.js) | 角色设定图（情绪表、视角表） |
 | [src/scenes/](src/scenes/) | 视频场景放这里（demo 只是示例） |
-| [render.mjs](render.mjs) | 无头渲染器：检查表、连续帧、裁剪、静帧、MP4；长渲染守护；按章渲染和拼接 |
+| [render.mjs](render.mjs) | 无头渲染器：检查表、连续帧、裁剪、静帧、MP4；长渲染守护；按章渲染和拼接；交付前统一校验 |
 | [docs/](docs/) | 设定图：[情绪](docs/emotions.jpg)（[动态版](docs/emotions.webp)）、[视角、动作和帽子](docs/views.jpg) |
 
 ## 来源

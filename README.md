@@ -35,6 +35,8 @@ Without a dedicated GPU, watercolour fills slow rendering down to a few seconds 
 
 Long renders look after themselves: `--frames` re-renders any frame that comes out black (a lost WebGL context), reopens pages every few hundred frames, and pauses workers while free memory is low (`--low-gb`, `--resume-gb`). If a render is stopped, run the same command again; finished frames are skipped. Chapter mode adds `--chapter` and `--concat`; see the notes at the top of [render.mjs](render.mjs).
 
+Before delivering, run `node render.mjs --review`: it checks for text leaving the frame, sudden jumps and long static stretches, renders a frame strip for every registered checkpoint and every cut, and writes a report (see “Pre-delivery review” in the guide).
+
 ## What's here
 
 | Path | What it is |
@@ -48,7 +50,7 @@ Long renders look after themselves: `--frames` re-renders any frame that comes o
 | [src/config.js](src/config.js) | Length and tempo; the chapter table in chapter mode |
 | [src/sheets.js](src/sheets.js) | Model sheets (emotions, views) |
 | [src/scenes/](src/scenes/) | Your video's scenes go here (the demo is only an example) |
-| [render.mjs](render.mjs) | Headless renderer: contact sheets, frame strips, crops, stills, MP4; long-render guard; per-chapter render and join |
+| [render.mjs](render.mjs) | Headless renderer: contact sheets, frame strips, crops, stills, MP4; long-render guard; per-chapter render and join; pre-delivery review |
 | [docs/](docs/) | Model sheets: [emotions](docs/emotions.jpg) ([animated](docs/emotions.webp)), [views, motion and hats](docs/views.jpg) |
 
 ## Credits

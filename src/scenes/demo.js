@@ -99,9 +99,9 @@
   //   ARRIVAL, the payoff (the star flares and a twinkle ripples across the sky; Clawd only watches, held ~0.45 s) →
   //   Clawd's REACTION (love, 0.45 s after the arrival: cause, then effect; held ~0.6 s) →
   //   goodbye (Clawd waves; 0.45 s later the star twinkles back) → the iris closes to Clawd, holds, and shuts.
+  const tStop = 1.0, tLift = 1.9, tHold = 2.25, tWind = 2.55, tThrow = 2.7, tHome = 3.5, tLove = 3.95, tWave = 4.55, tReply = 5.0, tIris = 5.4;
   function shotReturn(t, lt, dur) {
     const G = 880, u = 24;
-    const tStop = 1.0, tLift = 1.9, tHold = 2.25, tWind = 2.55, tThrow = 2.7, tHome = 3.5, tLove = 3.95, tWave = 4.55, tReply = 5.0, tIris = 5.4;
     camBegin(960 + 18 * Math.sin(lt * .8), kf(lt, [[0, 530], [tThrow, 515], [tHome + .1, 470]]), kf(lt, [[0, 1], [tThrow, 1.04], [tHome + .1, 1], [dur, 1.06]]));
     sky(t, 1.4, { x: 1440, y: 150, t0: t - lt + tHome });   // the sky twinkles hello when the star gets home
     hill(1300, 1180, 1300, 330, mixCol(PAL.teal, PAL.night, .45), t, 0);
@@ -161,4 +161,8 @@
   }
 
   shots([[0, shotFall], [4.4, shotReturn]]);
+  review(tLand, 'land', '星星落到山后');
+  review(4.4 + tLift, 'land', 'Clawd 把星星捧起来', { ask: '星星是不是贴着手？' });
+  review(4.4 + tThrow, 'other', '把星星扔回天上', { ask: '星星是从手里出去的吗？' });
+  review(4.4 + tLove, 'emote', '星星亮起来，Clawd 换成“爱心”表情');
 })();

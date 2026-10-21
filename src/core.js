@@ -132,6 +132,7 @@ function iris(cx, cy, r, col = PAL.ink) { if (r < 4) paint(rectPts(-60, -60, W +
 
 let T = 0, paperG = null, grainC = null, letG = null, glowTex = null, outC = null, outX = null;
 let LETTERS = [];
+let LETTER_LOG = [];   // 这一帧实际写出的所有字（屏幕坐标），给交付前校验用；draw() 每帧清空
 
 // ---------- geometry ----------
 function rectPts(x, y, w, h, j = 0) {
@@ -265,7 +266,9 @@ function flushBrush() {
 // frame; call it yourself before a wipe or iris if the shot has lettering, or the letters will sit on top of it.
 function flushLetters() {
   if (!LETTERS.length) return;
-  letG.clear(); drawLetters(letG.drawingContext); LETTERS = [];
+  letG.clear(); drawLetters(letG.drawingContext);
+  for (const L of LETTERS) LETTER_LOG.push(letterBox(L, letG.drawingContext));
+  LETTERS = [];
   flushBrush();
   // Letters are already in screen space, so composite them with the base transform even inside camBegin().
   push(); resetMatrix(); translate(-W / 2, -H / 2); image(letG, 0, 0); pop();
@@ -311,7 +314,7 @@ async function setup() {
 }
 function draw() {
   if (!window.ready) return;
-  LETTERS = []; CAM = LAST_CAM = null;
+  LETTERS = []; LETTER_LOG = []; CAM = LAST_CAM = null;
   push(); translate(-W / 2, -H / 2);
   BOILN = Math.floor(T * BOIL); CLAWD_N = 0; boilSeed('frame'); noiseSeed(77);
   image(paperG, 0, 0);
@@ -323,23 +326,46 @@ function composite(t) {
   c.globalCompositeOperation = 'source-over'; c.globalAlpha = 1;
   c.drawImage(drawingContext.canvas, 0, 0, W, H);
   drawLetters(c);
+  for (const L of LETTERS) LETTER_LOG.push(letterBox(L, c));
   c.globalCompositeOperation = 'multiply'; c.drawImage(grainC, 0, 0);
   c.globalCompositeOperation = 'source-over';
 }
+// 一个字的屏幕包围盒（按 drawLetters 的画法估算：居中或左对齐，不含 pop 动画的弹跳）
+function letterBox(L, c) {
+  c.save(); c.font = L.font || `${L.size}px "Permanent Marker", "Comic Sans MS", cursive`;
+  const w = c.measureText(L.txt).width; c.restore();
+  const h = L.size, x0 = L.align === 'left' ? L.x : L.align === 'right' ? L.x - w : L.x - w / 2;
+  return { txt: L.txt, x: L.x, y: L.y, x0, y0: L.y - h / 2, w, h, rot: L.rot || 0, alpha: L.alpha ?? 1 };
+}
+// 最近一次 renderAt 的逻辑日志：写出的字 + 64×36 灰度缩略图（检查跳变、长时间静止、纯色帧用）
+window.frameLog = () => {
+  const c = document.createElement('canvas'); c.width = 64; c.height = 36; const x = c.getContext('2d');
+  x.drawImage(outC, 0, 0, 64, 36); const d = x.getImageData(0, 0, 64, 36).data, g = new Uint8Array(64 * 36);
+  for (let i = 0; i < g.length; i++) g[i] = (d[i * 4] * 299 + d[i * 4 + 1] * 587 + d[i * 4 + 2] * 114) / 1000;
+  return { letters: LETTER_LOG, thumb: btoa(String.fromCharCode(...g)) };
+};
 window.renderAt = async (t, type = 'image/png', q = .92) => { T = t; await redraw(); composite(t); return outC.toDataURL(type, q); };
 // Contact sheet of several times, for visual checks: returns { url, ms[] }. crop = [x, y, w, h] fills each cell with just
 // that region of the frame, at full resolution (for checking faces, hands and contacts up close). at = [x, y, w, h]
 // instead crops w × h around the WORLD point (x, y), wherever each frame's camera put it (a foot, a splash, a prop on
 // a moving shot); x and y may be expressions evaluated in the page.
-window.renderSheet = async (times, cols = 3, w = 640, crop = null, at = null) => {
+window.renderSheet = async (times, cols = 3, w = 640, crop = null, at = null, title = null, labels = null) => {
   if (at) at = at.map((v) => typeof v === 'string' ? (0, eval)(v) : v);
   const [, , cw, ch] = at || crop || [0, 0, W, H], h = Math.round(w * ch / cw), rows = Math.ceil(times.length / cols), sc = document.createElement('canvas');
-  sc.width = cols * w; sc.height = rows * h; const c = sc.getContext('2d'), ms = [];
+  const titleH = title ? 40 : 0;
+  sc.width = cols * w; sc.height = rows * h + titleH; const c = sc.getContext('2d'), ms = [];
+  if (title) { c.fillStyle = '#24202b'; c.fillRect(0, 0, sc.width, titleH); c.fillStyle = '#fff'; c.font = '18px sans-serif'; c.fillText(title, 12, 27, sc.width - 24); }
   for (let i = 0; i < times.length; i++) {
     const t0 = performance.now(); T = times[i]; await redraw(); composite(times[i]); ms.push(Math.round(performance.now() - t0));
-    const x = (i % cols) * w, y = Math.floor(i / cols) * h;
+    const x = (i % cols) * w, y = Math.floor(i / cols) * h + titleH;
     const [cx, cy] = at ? toScreen(at[0], at[1], LAST_CAM).map((v, j) => v - (j ? ch : cw) / 2) : crop || [0, 0];
-    c.drawImage(outC, cx, cy, cw, ch, x, y, w, h); c.fillStyle = 'rgba(0,0,0,.65)'; c.fillRect(x, y, 84, 24); c.fillStyle = '#fff'; c.font = '15px sans-serif'; c.fillText(times[i].toFixed(2) + 's', x + 6, y + 17);
+    c.drawImage(outC, cx, cy, cw, ch, x, y, w, h);
+    const label = labels?.[i] ?? times[i].toFixed(2) + 's';
+    c.fillStyle = 'rgba(0,0,0,.65)';
+    // 不传新参数时保留原来的标签宽度、绘制顺序和尺寸。
+    if (labels) c.font = '15px sans-serif';
+    c.fillRect(x, y, labels ? Math.max(84, c.measureText(label).width + 12) : 84, 24);
+    c.fillStyle = '#fff'; c.font = '15px sans-serif'; c.fillText(label, x + 6, y + 17);
   }
   return { url: sc.toDataURL('image/jpeg', .9), ms };
 };

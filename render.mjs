@@ -20,17 +20,25 @@
 //     node render.mjs --encode --chapter=1,2                 每段 → out/chapters/ch01.mp4；配乐用 out/music/ch01.wav，没有就是静音
 //     node render.mjs --concat [--chapter=1,2] [--out=out/video_{v}.mp4]   各段拼成一片；{v} 自动取下一个没用过的 v001、v002…
 //     第 0 段 = 片头（长度是 config.js 的 INTRO，INTRO 为 0 就没有第 0 段）
+//   交付前统一校验：
+//     node render.mjs --review [--chapter=1,2|all] [--out=out/review/{v}] [--step=0.0833] [--static-max=3]
+//     优先读取 out/frames 下的逐帧日志，缺的时间按 --step（默认 1/12 秒）采样；报告和连续帧图写入新编号目录。
+//     不通过时退出码为 1；提醒和每张连续帧图仍须逐张人工核对（见指南“交付前统一校验”）。
 //   Standalone loops (LOOPS in the page): add --loop=<name> to any of the above (times are then loop times), or
 //     node render.mjs --loop=emotions --png --out=out/loop_emotions                          one cycle as PNGs (for GIFs)
 //   Music: --audio=assets/song.mp3 (or PROJECT.audio) is muxed into --clip and --encode. Other flags: --fps=24,
 //   --chrome=<path to Chrome/Chromium>.
 import puppeteer from 'puppeteer-core';
 import { spawn } from 'node:child_process';
-import { mkdirSync, writeFileSync, existsSync, statSync, renameSync, readdirSync, readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { mkdirSync, writeFileSync, existsSync, statSync, renameSync, readdirSync, readFileSync, appendFileSync } from 'node:fs';
+import { dirname, resolve, basename, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import os, { homedir } from 'node:os';
 
+// 跳变：帧差超过本段中位数的 4 倍且超过 8 灰度级，仅提醒，不替人下结论。
+const REVIEW_JUMP_FACTOR = 4, REVIEW_JUMP_MIN = 8;
+// 静止：帧差不超过本段第 15 百分位的 1.8 倍；零阈值也能识别完全不动的帧。
+const REVIEW_STATIC_FACTOR = 1.8;
 const args = Object.fromEntries(process.argv.slice(2).map(a => { const [k, v] = a.replace(/^--/, '').split('='); return [k, v ?? true]; }));
 const CHROMES = [args.chrome, process.env.CHROME_PATH, 'C:/Program Files/Google/Chrome/Application/chrome.exe', 'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe',
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser',
@@ -146,7 +154,171 @@ const frameOf = async (page, t, type, q) => {
 // the length of whatever is being rendered: a loop's .len, or the video's duration
 const lengthOf = page => page.evaluate(() => window.LOOP ? window.LOOP.len : DUR);
 
-if (args.sheet || args.strip) {
+// ---------- 交付前统一校验 ----------
+function reviewDirectory(pattern = 'out/review/{v}') {
+  mkdirSync(dirname(pattern), { recursive: true });
+  for (let n = 1; ; n++) {
+    const out = pattern.replace('{v}', 'r' + String(n).padStart(3, '0'));
+    try { mkdirSync(out); return out; }
+    catch (e) { if (e.code !== 'EEXIST') throw e; if (!pattern.includes('{v}')) throw new Error(`${out} 已存在，不覆盖：请换目录或使用 {v}`); }
+  }
+}
+function reviewLogs(root) {
+  const files = [];
+  function walk(dir) {
+    if (!existsSync(dir)) return;
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (basename(dir) === '_review' && e.name.endsWith('.ndjson')) files.push(p);
+    }
+  }
+  walk(root);
+  // 老日志没有 writtenAt 时，按文件修改顺序、行顺序读；新日志用记录时间判断跨 worker 的续渲先后。
+  files.sort((a, b) => statSync(a).mtimeMs - statSync(b).mtimeMs || a.localeCompare(b));
+  const latest = new Map();
+  for (const file of files) {
+    let bad = 0;
+    for (const line of readFileSync(file, 'utf8').split(/\r?\n/)) {
+      if (!line.trim()) continue;
+      try {
+        const r = JSON.parse(line);
+        if (!Number.isFinite(r.t) || typeof r.f !== 'string' || !Array.isArray(r.letters) || typeof r.thumb !== 'string' || Buffer.from(r.thumb, 'base64').length !== 64 * 36) throw new Error('无效记录');
+        const key = join(dirname(dirname(file)), r.f), old = latest.get(key);
+        if (!old || !old.writtenAt || !r.writtenAt || r.writtenAt >= old.writtenAt) latest.set(key, r);
+      } catch { bad++; }
+    }
+    if (bad) console.warn(`[review] ${file} 跳过 ${bad} 条损坏或不完整的日志，将补采缺失时间`);
+  }
+  // 全片和分章渲染可能包含同一视频时刻；只检查该时刻最新的记录，不能混入旧版文字。
+  const byTime = new Map();
+  for (const r of [...latest.values()].sort((a, b) => (a.writtenAt || 0) - (b.writtenAt || 0))) byTime.set(r.t.toFixed(6), r);
+  return [...byTime.values()].sort((a, b) => a.t - b.t);
+}
+const reviewTime = t => { const tenths = Math.round(t * 10); return `${String(Math.floor(tenths / 600)).padStart(2, '0')}:${((tenths % 600) / 10).toFixed(1).padStart(4, '0')}`; };
+const reviewInterval = r => reviewTime(r.t) + (r.until > r.t ? '–' + reviewTime(r.until) : '');
+const reviewCell = x => String(x ?? '').replace(/\|/g, '\\|').replace(/[\r\n]+/g, ' ');
+const reviewQuantile = (xs, q) => { const a = [...xs].sort((x, y) => x - y); return a.length ? a[Math.floor((a.length - 1) * q)] : 0; };
+const reviewDiff = (a, b) => { let sum = 0; for (let i = 0; i < a.length; i++) sum += Math.abs(a[i] - b[i]); return sum / a.length; };
+function reviewFindings(rows, checkpoints, width, height, step, staticMax, textRows = rows) {
+  const out = [], last = new Map(), allCuts = checkpoints.filter(r => r.kind === 'cut'), cuts = allCuts.filter(r => r.auto);
+  const nearCut = (t, win) => cuts.some(c => Math.abs(c.t - t) <= win);
+  // 连续帧上的同一问题合并为一条，留时间范围，避免几秒钟的文字问题生成上百张图。
+  const add = (key, t, kind, check, detail, fail = false) => {
+    const old = last.get(key);
+    if (old && t - old.until <= step * 1.5 + 1e-6) { old.until = t; return; }
+    const item = { t, until: t, kind, check, detail, fail }; last.set(key, item); out.push(item);
+  };
+  const intersect = (a, b) => Math.max(0, Math.min(a.x0 + a.w, b.x0 + b.w) - Math.max(a.x0, b.x0)) * Math.max(0, Math.min(a.y0 + a.h, b.y0 + b.h) - Math.max(a.y0, b.y0));
+  for (const r of textRows) {
+    const letters = r.letters.filter(l => l.alpha > .05 && l.w > 0 && l.h > 0);
+    for (const l of letters) if (intersect(l, { x0: 0, y0: 0, w: width, h: height }) < l.w * l.h / 2)
+      add('outside:' + l.txt, r.t, 'text', '文字出画', `「${l.txt}」超过一半包围盒在画面外（${l.x.toFixed(1)}, ${l.y.toFixed(1)}）`, true);
+    for (let i = 0; i < letters.length; i++) for (let j = i + 1; j < letters.length; j++) {
+      const a = letters[i], b = letters[j];
+      if (a.txt !== b.txt && intersect(a, b) > .3 * Math.min(a.w * a.h, b.w * b.h))
+        add('overlap:' + [a.txt, b.txt].sort().join('|'), r.t, 'text', '文字重叠', `「${a.txt}」和「${b.txt}」交叠超过较小包围盒的 30%`);
+    }
+  }
+  for (const r of rows) {
+    const g = r.gray, mean = g.reduce((s, x) => s + x, 0) / g.length;
+    const sd = Math.sqrt(g.reduce((s, x) => s + (x - mean) ** 2, 0) / g.length);
+    // 开场半秒允许黑场，切点前后半秒允许笔刷转场。
+    if (sd < 2 && r.t > .5 && !allCuts.some(c => Math.abs(c.t - r.t) <= .5)) add('plain', r.t, 'other', '纯色帧', `灰度标准差 ${sd.toFixed(2)} < 2`);
+  }
+  // 每个镜头分别计算阈值，避免一个强运动镜头把另一个镜头的变化掩盖。
+  const groups = [];
+  for (const r of rows) {
+    const g = groups.at(-1), prev = g?.at(-1);
+    if (!prev || r.t - prev.t > step * 1.5 || cuts.some(c => c.t > prev.t && c.t <= r.t)) groups.push([r]);
+    else g.push(r);
+  }
+  for (const group of groups) {
+    const ds = group.slice(1).map((r, i) => reviewDiff(r.gray, group[i].gray));
+    const median = reviewQuantile(ds, .5), low = reviewQuantile(ds, .15) * REVIEW_STATIC_FACTOR;
+    let start = null;
+    const finish = end => {
+      if (start != null && end - start > staticMax) add('static:' + start, start, 'hold', '长时间静止', `${reviewTime(start)}–${reviewTime(end)}（${(end - start).toFixed(1)} 秒）帧差持续偏低`);
+      start = null;
+    };
+    for (let i = 1; i < group.length; i++) {
+      const r = group[i], prev = group[i - 1], d = ds[i - 1];
+      if (d > median * REVIEW_JUMP_FACTOR && d > REVIEW_JUMP_MIN && !nearCut(r.t, 2 / fps))
+        add('jump', r.t, 'other', '跳变', `平均帧差 ${d.toFixed(2)}，本段中位数 ${median.toFixed(2)}`);
+      const held = checkpoints.some(c => c.kind === 'hold' && c.until != null && prev.t >= c.t - 1e-6 && r.t <= c.until + 1e-6);
+      if (d <= low && !held) { if (start == null) start = prev.t; }
+      else finish(prev.t);
+    }
+    finish(group.at(-1)?.t ?? 0);
+  }
+  return out.sort((a, b) => a.t - b.t);
+}
+async function runReview(page) {
+  if (args.loop) throw new Error('--review 检查全片或章节，不与 --loop 同用');
+  const step = +(args.step || 1 / 12), staticMax = +(args['static-max'] || 3);
+  if (!Number.isFinite(step) || step <= 0 || !Number.isFinite(staticMax) || staticMax <= 0) throw new Error('--step 和 --static-max 必须是正数');
+  const meta = await page.evaluate(() => ({ len: DUR, width: W, height: H, manual: REVIEWS, automatic: autoReviews(), kinds: REVIEW_KINDS }));
+  const ranges = args.chapter ? [...new Set(chList())].sort((a, b) => a - b).map(n => [chStart(n), chStart(n) + chDur(n)]) : [[0, meta.len]];
+  const inRange = t => ranges.some(([a, b]) => t >= a && t < b);
+  const analysisPoints = [...meta.manual, ...meta.automatic];
+  const checkpoints = analysisPoints.filter(r => inRange(r.t)).sort((a, b) => a.t - b.t);
+  const logs = reviewLogs(FRAMES_DIR).filter(r => inRange(r.t));
+  // 用统一采样时间轴比较，避免 24fps 日志和 12fps 补采的帧差阈值不同。时间精度不超过半帧。
+  const rows = [], missing = [];
+  let cursor = 0;
+  for (const [a, b] of ranges) for (let i = 0; a + i * step < b - 1e-7; i++) {
+    const t = a + i * step;
+    while (cursor + 1 < logs.length && Math.abs(logs[cursor + 1].t - t) <= Math.abs(logs[cursor].t - t)) cursor++;
+    const cached = logs[cursor];
+    if (cached && Math.abs(cached.t - t) <= Math.min(step / 2, 1 / (2 * fps)) + 1e-7) rows.push({ ...cached, t });
+    else { const r = { t }; rows.push(r); missing.push(r); }
+  }
+  if (missing.length) {
+    // 用第一张缺帧的实际耗时估算剩余时间，不把固定机器速度当承诺。
+    const sample = async r => Object.assign(r, await page.evaluate(async t => { await window.renderAt(t, 'image/jpeg', .5); return window.frameLog(); }, r.t));
+    console.log(`${logs.length ? '逐帧日志不全' : '没有逐帧日志'}，按 ${args.step ? step + ' 秒' : '1/12 秒'}采样，正在估算 ${missing.length} 帧所需时间`);
+    const started = Date.now(); await sample(missing[0]);
+    console.log(`补采约需 ${((Date.now() - started) * (missing.length - 1) / 60000).toFixed(1)} 分钟`);
+    for (const r of missing.slice(1)) await sample(r);
+  }
+  for (const r of rows) r.gray = Buffer.from(r.thumb, 'base64');
+  const textRows = [...logs, ...missing].sort((a, b) => a.t - b.t);
+  const findings = reviewFindings(rows, analysisPoints, meta.width, meta.height, step, staticMax, textRows);
+  const out = reviewDirectory(args.out), all = [...checkpoints, ...findings];
+  for (let i = 0; i < all.length; i++) {
+    const r = all[i], finding = i >= checkpoints.length;
+    const win = finding ? [-.4, .4] : r.window || meta.kinds[r.kind].win;
+    const range = ranges.find(([a, b]) => r.t >= a && r.t < b);
+    const a = Math.max(range[0], r.t + win[0]), b = Math.min(range[1] - 1 / fps, (finding ? r.t : r.until ?? r.t) + win[1]);
+    const count = Math.max(1, Math.floor(Math.max(0, b - a) * 12 + 1e-6) + 1);
+    const n = Math.min(16, count);
+    const ts = Array.from({ length: n }, (_, j) => a + (count <= 16 ? j : Math.round(j * (count - 1) / (n - 1))) / 12);
+    const labels = ts.map(t => Math.abs(t - r.t) < 1 / 48 ? '此刻' : `${t < r.t ? '前' : '后'} ${Math.abs(t - r.t).toFixed(2)}s`);
+    const title = `${r.kind} · ${reviewTime(r.t)} · ${r.what || r.check}`;
+    const { url } = await page.evaluate((ts, title, labels) => window.renderSheet(ts, 4, 480, null, null, title, labels), ts, title, labels);
+    r.image = `${String(i + 1).padStart(2, '0')}_${r.kind}_${reviewTime(r.t).replace(':', '-')}.jpg`;
+    writeFileSync(join(out, r.image), Buffer.from(url.slice(url.indexOf(',') + 1), 'base64'));
+  }
+  const failures = findings.filter(r => r.fail), warnings = findings.length - failures.length;
+  const scope = args.chapter ? `第 ${[...new Set(chList())].join('、')} 章` : '全片';
+  const lines = [`# 交付前校验报告（${basename(out)}，${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC）`, '',
+    `范围：${scope}　检查点 ${checkpoints.length} 个（自动 ${checkpoints.filter(r => r.auto).length}、登记 ${checkpoints.filter(r => !r.auto).length}）　自动检查：不通过 ${failures.length}、提醒 ${warnings}`, '',
+    '## 结论', failures.length ? `**有 ${failures.length} 处不通过**：` : '**自动检查没有不通过项；仍须逐张看图并完整看片。**',
+    ...failures.map(r => `- ${reviewInterval(r)} ${r.check}：${reviewCell(r.detail)}（[图 ${r.image}](${r.image})）`), '',
+    '## 自动检查', '| 时刻 | 检查 | 详情 | 图 |', '|---|---|---|---|',
+    ...findings.map(r => `| ${reviewInterval(r)} | ${r.check} · ${r.fail ? '不通过' : '提醒'} | ${reviewCell(r.detail)} | [${r.image}](${r.image}) |`), '',
+    '## 检查点（逐张看图，在“看过”列填 ✅ 或写下问题）', '| # | 时刻 | 类别 | 画面上是什么 | 要看什么 | 图 | 看过 |', '|---|---|---|---|---|---|---|',
+    ...checkpoints.map((r, i) => `| ${i + 1} | ${reviewTime(r.t)} | ${r.kind} | ${reviewCell(r.what)} | ${reviewCell([meta.kinds[r.kind].ask, r.ask].filter(Boolean).join(' '))} | [${r.image}](${r.image}) | |`), '',
+    `采样间隔：${step} 秒；文字包围盒为估算值（不含 pop 弹跳），自动提醒不能替代逐图核对。`, ''];
+  writeFileSync(join(out, 'report.md'), lines.join('\n'));
+  console.log(`${out}/report.md：不通过 ${failures.length}、提醒 ${warnings}，${all.length} 张连续帧图`);
+  if (failures.length) process.exitCode = 1;
+}
+
+if (args.review) {
+  try { await runReview(await openPage()); }
+  catch (e) { await browser.close(); throw e; }
+} else if (args.sheet || args.strip) {
   const page = await openPage(), out = args.out || 'out/sheet.jpg'; mkdirSync(dirname(out), { recursive: true });
   let ts;
   if (args.strip) { const [a, b] = span(args.strip); ts = []; for (let i = Math.round(a * fps); i <= Math.round(b * fps); i++) ts.push(i / fps); }
@@ -224,6 +396,12 @@ if (args.sheet || args.strip) {
       }
       used++;
       writeFileSync(f + '.tmp', buf); renameSync(f + '.tmp', f);
+      try {
+        const log = await page.evaluate(() => window.frameLog()), dir = `${dirname(f)}/_review`;
+        mkdirSync(dir, { recursive: true });
+        appendFileSync(`${dir}/log-w${w}.ndjson`, JSON.stringify({ f: basename(f), t: ft, ...log, writtenAt: performance.timeOrigin + performance.now() }) + '\n');
+      } catch (e) { console.warn(`[review] 帧 ${f} 日志失败（渲染继续）：${e.message}`); }
+
       if (++done % 24 === 0 || done === todo.length) {
         const el = (Date.now() - start) / 1000;
         console.log(`frame ${done}/${todo.length}  ${(el / done * 1000).toFixed(0)} ms/frame effective  eta ${((todo.length - done) * el / done / 60).toFixed(1)} min  剩余内存 ${freeGB()} GB`);
